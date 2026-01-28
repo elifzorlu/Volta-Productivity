@@ -10,7 +10,7 @@ The core engine is a **PyTorch LSTM (Long Short-Term Memory)** network that capt
 * **Optimization:** Custom training loop with explicit device management (CPU/GPU) to handle memory allocation constraints.
 * **Stack:** Python, PyTorch, NumPy, Pandas.
    ```bash
-   git clone [https://github.com/elifzorlu/Volta-Productivity-Model.git](https://github.com/elifzorlu/Volta-Productivity-Model.git)
+   git clone https://github.com/elifzorlu/Volta-Productivity-Model.git
    cd Volta-Productivity-Model
   ```
 Install dependencies:
