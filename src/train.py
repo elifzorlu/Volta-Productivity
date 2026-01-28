@@ -43,16 +43,16 @@ def get_dummy_data(seq_length=5):
 
 # 3. TRAINING LOOP
 def train_model(epochs, learning_rate, device_name):
-    print(f"--- 🚀 INITIALIZING VOLTA TRAINING PIPELINE ---")
+    print(f"--- INITIALIZING VOLTA TRAINING PIPELINE ---")
     
     # HARDWARE CHECK: Verify if CUDA is actually available if requested
     if  device_name == 'cuda' and not torch.cuda.is_available():
-        print("⚠️  WARNING: CUDA requested but not available. Fallback to CPU.")
+        print("WARNING: CUDA requested but not available. Fallback to CPU.")
         device = torch.device('cpu')
     else:
         device =  torch.device(device_name)
     
-    print(f"✅ Hardware Accelerator: [{device}]") 
+    print(f"Hardware Accelerator: [{device}]") 
     
     # Initialize Model & Move to Hardware
     model = ProductivityLSTM().to(device)
@@ -77,7 +77,7 @@ def train_model(epochs, learning_rate, device_name):
             print(f"Epoch [{epoch+1}/{epochs}], Loss: {loss.item():.4f}")
 
     duration = time.time() - start_time
-    print(f"\n✨ Training Complete using {device} in {duration:.2f} seconds.")
+    print(f"\n Training Complete using {device} in {duration:.2f} seconds.")
 
 # 4. COMMAND LINE INTERFACE (CLI)
 if __name__ == "__main__":
