@@ -5,90 +5,102 @@ import pandas as pd
 import numpy as np
 import argparse
 import time
+import joblib
+import os
+from sklearn.preprocessing import MinMaxScaler
 
-# 1. THE MODEL (The "AI" part)
-# Simple LSTM that takes a sequence of days and predicts the next day's focus score.
-class ProductivityLSTM(nn.Module):
-    def __init__(self, input_dim=2, hidden_dim=64, output_dim=1, num_layers=2):
-        super(ProductivityLSTM, self).__init__()
-        self.hidden_dim = hidden_dim
-        self.num_layers = num_layers
-        
-        # LSTM Layer
-        self.lstm =  nn.LSTM(input_dim, hidden_dim, num_layers, batch_first=True)
-        
-        # Fully Connected Layer (Regression output)
-        self.fc =  nn.Linear(hidden_dim, output_dim)
+# --- 1. CONFIGURATION ---
+FEATURES = ['sleep_hours', 'caffeine_mg', 'screen_time_hours']
+TARGET = 'productivity_score'
+SEQ_LENGTH = 7  # Look back at past week
+
+# --- 2. DATA PIPELINE ---
+def load_and_process_data(csv_path, device):
+    print(f"📊 Loading data from {csv_path}...")
+    df = pd.read_csv(csv_path)
+    
+    # Scale Data 
+    scaler = MinMaxScaler()
+    df_scaled = df.copy()
+    df_scaled[FEATURES + [TARGET]] = scaler.fit_transform(df[FEATURES + [TARGET]])
+    
+    # Save scaler for inference later
+    os.makedirs('artifacts', exist_ok=True)
+    joblib.dump(scaler, 'artifacts/scaler.pkl')
+    
+    # Create Sequences (Sliding Window)
+    data = df_scaled[FEATURES + [TARGET]].values
+    sequences = []
+    targets = []
+    
+    for i in range(len(data) - SEQ_LENGTH):
+        seq = data[i:i+SEQ_LENGTH, :-1]  # Input: Features only
+        label = data[i+SEQ_LENGTH, -1]   # Target: Productivity
+        sequences.append(seq)
+        targets.append(label)
+    
+    # Convert to Tensors
+    X = torch.FloatTensor(np.array(sequences)).to(device)
+    y = torch.FloatTensor(np.array(targets)).view(-1, 1).to(device)
+    
+    # Chronological Split (No random shuffle for time-series!)
+    train_size = int(len(X) * 0.8)
+    return X[:train_size], y[:train_size], X[train_size:], y[train_size:]
+
+# --- 3. MODEL ARCHITECTURE ---
+class VoltaLSTM(nn.Module):
+    def __init__(self, input_dim, hidden_dim=64, num_layers=2):
+        super(VoltaLSTM, self).__init__()
+        self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers, batch_first=True)
+        self.fc = nn.Linear(hidden_dim, 1)
 
     def forward(self, x):
-        # Initialize hidden state and cell state with zeros
-        # need to be careful about the DEVICE (CPU vs GPU)
-        h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_dim).to(x.device)
-        c0 = torch.zeros(self.num_layers, x.size(0), self.hidden_dim).to(x.device)
-        
-        # Forward propagate LSTM
-        out, _ =  self.lstm(x, (h0, c0))
-        
-        # Decode the hidden state of the last time step
-        out = self.fc(out[:, -1, :])
-        return out
+        out, _ = self.lstm(x)
+        return self.fc(out[:, -1, :]) # Take last time-step
 
-# 2. DATA LOADER (Simple mocked version for now)
-def get_dummy_data(seq_length=5):
-    # Generates random tensors to simulate: [Batch Size, Sequence Length, Features]
-    # Features = [Sleep Hours, Caffeine Intake]
-    X = torch.randn(100, seq_length, 2) 
-    y =  torch.randn(100, 1) # Target = Focus Score
-    return X, y
-
-# 3. TRAINING LOOP
-def train_model(epochs, learning_rate, device_name):
-    print(f"--- INITIALIZING VOLTA TRAINING PIPELINE ---")
-    
-    # HARDWARE CHECK: Verify if CUDA is actually available if requested
-    if  device_name == 'cuda' and not torch.cuda.is_available():
-        print("WARNING: CUDA requested but not available. Fallback to CPU.")
+# --- 4. TRAINING LOOP ---
+def train_pipeline(args):
+    # Hardware Check
+    if args.device == 'cuda' and not torch.cuda.is_available():
+        print("⚠️  CUDA not available. Using CPU.")
         device = torch.device('cpu')
     else:
-        device =  torch.device(device_name)
+        device = torch.device(args.device)
+        
+    print(f"🚀 Training on device: {device}")
     
-    print(f"Hardware Accelerator: [{device}]") 
+    # Load Data
+    X_train, y_train, X_val, y_val = load_and_process_data('data/productivity_data.csv', device)
     
-    # Initialize Model & Move to Hardware
-    model = ProductivityLSTM().to(device)
+    # Init Model
+    model = VoltaLSTM(input_dim=len(FEATURES)).to(device)
     criterion = nn.MSELoss()
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    optimizer = optim.Adam(model.parameters(), lr=args.lr)
     
-    # Load Data & Move to Hardware
-    X_train, y_train = get_dummy_data()
-    X_train, y_train = X_train.to(device), y_train.to(device) 
-    
+    # Train
     start_time = time.time()
-    
     model.train()
-    for epoch in range(epochs):
+    
+    for epoch in range(args.epochs):
         optimizer.zero_grad()
-        outputs = model(X_train)
-        loss = criterion(outputs, y_train)
+        output = model(X_train)
+        loss = criterion(output, y_train)
         loss.backward()
         optimizer.step()
         
-        if (epoch+1) %10 == 0:
-            print(f"Epoch [{epoch+1}/{epochs}], Loss: {loss.item():.4f}")
+        if epoch % 10 == 0:
+            val_loss = criterion(model(X_val), y_val)
+            print(f"Epoch {epoch} | Train Loss: {loss.item():.5f} | Val Loss: {val_loss.item():.5f}")
+            
+    # Save Model
+    torch.save(model.state_dict(), 'artifacts/volta_model.pth')
+    print(f"\n✨ Done! Model saved to artifacts/volta_model.pth ({time.time()-start_time:.2f}s)")
 
-    duration = time.time() - start_time
-    print(f"\n Training Complete using {device} in {duration:.2f} seconds.")
-
-# 4. COMMAND LINE INTERFACE (CLI)
 if __name__ == "__main__":
-    parser =  argparse.ArgumentParser(description='Volta: LSTM Training Pipeline')
-    
-    parser.add_argument('--device', type=str, default='cpu', choices=['cpu', 'cuda'], 
-                        help='Compute device to use for training (cpu or cuda)')
-    
-    parser.add_argument('--epochs',  type=int, default=100, help='Number of training epochs')
-    parser.add_argument('--lr', type=float,default=0.01, help='Learning rate')
-
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--device', type=str, default='cpu', choices=['cpu', 'cuda'])
+    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--lr', type=float, default=0.005)
     args = parser.parse_args()
     
-    train_model(args.epochs, args.lr, args.device)
+    train_pipeline(args)
